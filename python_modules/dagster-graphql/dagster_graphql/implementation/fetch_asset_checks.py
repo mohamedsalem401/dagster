@@ -1,5 +1,6 @@
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Optional
+from types import EllipsisType
+from typing import TYPE_CHECKING, Optional, Union
 
 from dagster import _check as check
 from dagster._core.definitions.asset_checks.asset_check_spec import AssetCheckKey
@@ -19,6 +20,7 @@ def fetch_asset_check_executions(
     asset_check_key: AssetCheckKey,
     limit: int,
     cursor: Optional[str],
+    partition: Union[str, None, EllipsisType],
 ) -> list["GrapheneAssetCheckExecution"]:
     from dagster_graphql.schema.asset_checks import GrapheneAssetCheckExecution
 
@@ -26,6 +28,7 @@ def fetch_asset_check_executions(
         check_key=asset_check_key,
         limit=limit,
         cursor=int(cursor) if cursor else None,
+        partition=partition,
     )
 
     RunRecord.prepare(
