@@ -160,15 +160,23 @@ def execute_materialize_command(
 
         partition_range_start, partition_range_end = partition_range.split("...")
 
-        for asset_key in asset_keys:
-            backfill_policy = implicit_job_def.asset_layer.get(asset_key).backfill_policy
-            if (
-                backfill_policy is not None
-                and backfill_policy.policy_type != BackfillPolicyType.SINGLE_RUN
-            ):
-                check.failed(
-                    "Provided partition range, but not all assets have a single-run backfill policy."
-                )
+        # Only validate backfill policy if the range contains multiple partitions (start != end).
+        # When start == end, it's effectively a single partition and doesn't require single-run policy.
+        if partition_range_start != partition_range_end:
+            for asset_key in asset_keys:
+                backfill_policy = implicit_job_def.asset_layer.get(asset_key).backfill_policy
+                if (
+                    backfill_policy is None
+                    or backfill_policy.policy_type != BackfillPolicyType.SINGLE_RUN
+                ):
+                    check.failed(
+                        f"Cannot use --partition-range with asset '{asset_key.to_user_string()}' "
+                        "because it does not have a single-run backfill policy. "
+                        "Options:\n"
+                        "  1. Use --partition to launch individual partitions\n"
+                        "  2. Add backfill_policy=BackfillPolicy.single_run() to the asset "
+                        "and use partition_time_window or partition_key_range instead of partition_key"
+                    )
         try:
             implicit_job_def.validate_partition_key(
                 partition_range_start, selected_asset_keys=asset_keys, context=context

@@ -179,10 +179,43 @@ def test_partition_range_multi_run_backfill_policy():
             "multi_run_partitioned_asset",
             partition_range="2020-01-01...2020-01-03",
         )
-        assert (
-            "Provided partition range, but not all assets have a single-run backfill policy."
-            in str(result.exception)
+        assert "Cannot use --partition-range with asset" in str(result.exception)
+        assert "does not have a single-run backfill policy" in str(result.exception)
+
+
+def test_partition_range_no_backfill_policy():
+    """Test that partition range fails for assets without a backfill policy when start != end.
+
+    This is the fix for issue #31055. Assets without a backfill policy are designed
+    to process single partitions and access context.partition_key, which raises an
+    error when used with a partition range where start != end.
+    """
+    with dg.instance_for_test():
+        result = invoke_materialize(
+            "partitioned_asset",
+            partition_range="one...three",
         )
+        assert "Cannot use --partition-range with asset" in str(result.exception)
+        assert "does not have a single-run backfill policy" in str(result.exception)
+        assert "Use --partition to launch individual partitions" in str(result.exception)
+        assert "Add backfill_policy=BackfillPolicy.single_run()" in str(result.exception)
+
+
+def test_partition_range_same_start_end_no_backfill_policy():
+    """Test that partition range works for assets without a backfill policy when start == end.
+
+    When start == end, the partition range is effectively a single partition,
+    so context.partition_key works fine and no backfill policy is required.
+    """
+    with dg.instance_for_test() as instance:
+        result = invoke_materialize(
+            "partitioned_asset",
+            partition_range="one...one",
+        )
+        assert "RUN_SUCCESS" in result.output
+        event = instance.get_latest_materialization_event(dg.AssetKey("partitioned_asset"))
+        assert event is not None
+        assert event.asset_materialization.partition == "one"  # pyright: ignore[reportOptionalMemberAccess]
 
 
 def test_failure():
