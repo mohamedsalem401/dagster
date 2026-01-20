@@ -1,9 +1,15 @@
 from functools import cached_property
-from typing import Any
 
 import dagster as dg
-from polytomic import BulkSchema, BulkSyncResponse, ConnectionResponseSchema, Polytomic
+from polytomic import Polytomic
 from pydantic import Field
+
+from dagster_polytomic.objects import (
+    PolytomicBulkSync,
+    PolytomicBulkSyncSchema,
+    PolytomicConnection,
+    PolytomicWorkspaceData,
+)
 
 POLYTOMIC_CLIENT_VERSION = "2024-02-08"
 
@@ -24,19 +30,22 @@ class PolytomicWorkspace(dg.Resolvable, dg.Model):
             token=self.api_key,
         )
 
-    def _fetch_connections(self) -> list[ConnectionResponseSchema]:
+    def _fetch_connections(self) -> list[PolytomicConnection]:
         """Fetch all connections."""
-        return self.client.connections.list().data or []
+        response = self.client.connections.list().data or []
+        return [PolytomicConnection.from_api_response(conn) for conn in response]
 
-    def _fetch_bulk_syncs(self) -> list[BulkSyncResponse]:
+    def _fetch_bulk_syncs(self) -> list[PolytomicBulkSync]:
         """Fetch all bulk syncs."""
-        return self.client.bulk_sync.list().data or []
+        response = self.client.bulk_sync.list().data or []
+        return [PolytomicBulkSync.from_api_response(sync) for sync in response]
 
-    def _fetch_bulk_sync_schemas(self, bulk_sync_id: str) -> list[BulkSchema]:
+    def _fetch_bulk_sync_schemas(self, bulk_sync_id: str) -> list[PolytomicBulkSyncSchema]:
         """Fetch all schemas for a specific bulk sync."""
-        return self.client.bulk_sync.schemas.list(id=bulk_sync_id).data or []
+        response = self.client.bulk_sync.schemas.list(id=bulk_sync_id).data or []
+        return [PolytomicBulkSyncSchema.from_api_response(schema) for schema in response]
 
-    async def fetch_polytomic_state(self) -> dict[str, Any]:
+    async def fetch_polytomic_state(self) -> PolytomicWorkspaceData:
         """Fetch all connections, bulks syncs and schemas from the Polytomic API.
 
         This is the main public method for getting complete Polytomic state.
@@ -47,8 +56,8 @@ class PolytomicWorkspace(dg.Resolvable, dg.Model):
         for bulk_sync in bulk_syncs:
             schemas[bulk_sync.id] = self._fetch_bulk_sync_schemas(bulk_sync_id=bulk_sync.id)
 
-        return {
-            "connections": connections,
-            "bulk_syncs": bulk_syncs,
-            "schemas": schemas,
-        }
+        return PolytomicWorkspaceData(
+            connections=connections,
+            bulk_syncs=bulk_syncs,
+            schemas=schemas,
+        )
