@@ -1,0 +1,326 @@
+name: Run tests with inline patches
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        required: true
+        type: string
+
+      test_patch_b64:
+        required: true
+        type: string
+
+      golden_patch_b64:
+        required: true
+        type: string
+
+      base_patch_b64:
+        required: false
+        default: ""
+        type: string
+
+      test_cmd:
+        required: true
+        type: string
+
+      callback_url:
+        required: true
+        type: string
+
+      submission_id:
+        required: true
+        type: string
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Make runner environment CLI-friendly (history/home)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Ensure HOME is set and writable
+          export HOME="${HOME:-/home/runner}"
+          mkdir -p "$HOME"
+
+          # Create common readline / REPL history files (harmless if unused)
+          touch "$HOME/.python_history" || true
+          touch "$HOME/.mpmath_history" || true
+          touch "$HOME/.history" || true
+          touch "$HOME/.ipython_history" || true
+
+          # Some tools look for XDG locations
+          export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+          export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+          export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+          mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
+
+          # Optional: make sure python can write bytecode, caches, etc.
+          mkdir -p "$HOME/.local" "$HOME/.cache/pip" || true
+
+          echo "HOME=$HOME"
+          ls -la "$HOME" | head
+
+      - name: Decode patches
+        shell: bash
+        env:
+          TEST_PATCH_B64: $
+          GOLDEN_PATCH_B64: $
+          BASE_PATCH_B64: $
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/patches /tmp/logs
+
+          decode () {
+            local name="$1"
+            local b64="$2"
+            if [[ -z "$b64" ]]; then
+              return 0
+            fi
+            printf '%s' "$b64" | base64 -d > "/tmp/patches/$name"
+          }
+
+          decode "010_test.patch"   "$TEST_PATCH_B64"
+          decode "020_golden.patch" "$GOLDEN_PATCH_B64"
+          decode "000_base.patch"   "$BASE_PATCH_B64"
+
+          ls -la /tmp/patches
+
+      - name: Check1 – (base?) + golden
+        id: check1
+        shell: bash
+        run: |
+          set +e; set -o pipefail
+          git checkout --force "$"
+          git reset --hard; git clean -fdx
+
+          APPLY_OK=true
+
+          if [[ -f /tmp/patches/000_base.patch ]]; then
+            git apply /tmp/patches/000_base.patch 2>&1 | tee /tmp/logs/c1_apply.log
+            if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+              APPLY_OK=false
+              echo "c1_exit=100" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          if [[ "$APPLY_OK" == "true" ]]; then
+            git apply /tmp/patches/020_golden.patch 2>&1 | tee -a /tmp/logs/c1_apply.log
+            if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+              APPLY_OK=false
+              echo "c1_exit=101" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          if [[ "$APPLY_OK" == "true" ]]; then
+            bash -lc "$" 2>&1 | tee /tmp/logs/c1_test.log
+            echo "c1_exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "c1_apply_ok=$APPLY_OK" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Check2 – (base?) + test
+        id: check2
+        shell: bash
+        run: |
+          set +e; set -o pipefail
+          git checkout --force "$"
+          git reset --hard; git clean -fdx
+
+          APPLY_OK=true
+
+          if [[ -f /tmp/patches/000_base.patch ]]; then
+            git apply /tmp/patches/000_base.patch 2>&1 | tee /tmp/logs/c2_apply.log
+            if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+              APPLY_OK=false
+              echo "c2_exit=100" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          if [[ "$APPLY_OK" == "true" ]]; then
+            git apply /tmp/patches/010_test.patch 2>&1 | tee -a /tmp/logs/c2_apply.log
+            if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+              APPLY_OK=false
+              echo "c2_exit=101" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          if [[ "$APPLY_OK" == "true" ]]; then
+            bash -lc "$" 2>&1 | tee /tmp/logs/c2_test.log
+            echo "c2_exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "c2_apply_ok=$APPLY_OK" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Check3 – (base?) + golden + test
+        id: check3
+        shell: bash
+        run: |
+          set +e; set -o pipefail
+          git checkout --force "$"
+          git reset --hard; git clean -fdx
+
+          APPLY_OK=true
+
+          if [[ -f /tmp/patches/000_base.patch ]]; then
+            git apply /tmp/patches/000_base.patch 2>&1 | tee /tmp/logs/c3_apply.log
+            if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+              APPLY_OK=false
+              echo "c3_exit=100" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          if [[ "$APPLY_OK" == "true" ]]; then
+            git apply /tmp/patches/020_golden.patch 2>&1 | tee -a /tmp/logs/c3_apply.log
+            if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+              APPLY_OK=false
+              echo "c3_exit=101" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          if [[ "$APPLY_OK" == "true" ]]; then
+            git apply /tmp/patches/010_test.patch 2>&1 | tee -a /tmp/logs/c3_apply.log
+            if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+              APPLY_OK=false
+              echo "c3_exit=102" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          if [[ "$APPLY_OK" == "true" ]]; then
+            bash -lc "$" 2>&1 | tee /tmp/logs/c3_test.log
+            echo "c3_exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "c3_apply_ok=$APPLY_OK" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Callback to n8n
+        if: always()
+        shell: bash
+        env:
+          CALLBACK_URL: $
+          SUBMISSION_ID: $
+
+          C1_APPLY_OK: $
+          C1_EXIT: $
+
+          C2_APPLY_OK: $
+          C2_EXIT: $
+
+          C3_APPLY_OK: $
+          C3_EXIT: $
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import os, json, base64
+
+          # ---- knobs ----
+          # Max JSON payload size (bytes) to send to n8n.
+          # If your n8n/webhook accepts more, raise this.
+          MAX_JSON_BYTES = int(os.environ.get("MAX_JSON_BYTES", "12000000"))  # 12 MB default
+
+          LOG_PATHS = {
+              "check1": "/tmp/logs/c1_test.log",
+              "check2": "/tmp/logs/c2_test.log",
+              "check3": "/tmp/logs/c3_test.log",
+          }
+
+          def to_bool(v):
+              return str(v).lower() in ("1","true","yes","on")
+
+          def tail_bytes(path: str, n: int) -> bytes:
+              if n <= 0:
+                  return b""
+              try:
+                  with open(path, "rb") as f:
+                      f.seek(0, 2)
+                      size = f.tell()
+                      start = max(0, size - n)
+                      f.seek(start, 0)
+                      return f.read()
+              except FileNotFoundError:
+                  return b""
+
+          def b64_tail(path: str, n: int) -> str:
+              raw = tail_bytes(path, n)
+              if not raw:
+                  return ""
+              return base64.b64encode(raw).decode("ascii")
+
+          # Build payload without logs first
+          payload = {
+              "submission_id": os.environ["SUBMISSION_ID"],
+              "repo": os.environ.get("GITHUB_REPOSITORY", ""),
+              "github_run": os.environ.get("GITHUB_RUN_ID", ""),
+              "commit": os.environ.get("GITHUB_SHA", ""),  # fallback; you also set commit below in the workflow if desired
+
+              "check1_exit": int(os.environ.get("C1_EXIT","100")),
+              "check1_apply_ok": to_bool(os.environ.get("C1_APPLY_OK")),
+              "check1_log_b64": "",
+
+              "check2_exit": int(os.environ.get("C2_EXIT","100")),
+              "check2_apply_ok": to_bool(os.environ.get("C2_APPLY_OK")),
+              "check2_log_b64": "",
+
+              "check3_exit": int(os.environ.get("C3_EXIT","100")),
+              "check3_apply_ok": to_bool(os.environ.get("C3_APPLY_OK")),
+              "check3_log_b64": "",
+          }
+
+          # If you want the explicit input commit SHA (as in your original), prefer that via env:
+          # (GitHub expressions aren't available here; set COMMIT_SHA env in YAML if you want.)
+          commit_sha = os.environ.get("COMMIT_SHA")
+          if commit_sha:
+              payload["commit"] = commit_sha
+
+          # Compute how much room is left for logs.
+          base_json = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+          # Leave some slack for growth as we insert log strings
+          slack = 5120
+          budget = max(0, MAX_JSON_BYTES - len(base_json) - slack)
+
+          # Allocate budget roughly evenly across logs, but remember:
+          # base64 expands by ~4/3, plus JSON quotes. We'll be conservative.
+          # We'll allocate *raw bytes* per log, then b64 it.
+          per_log_raw = max(0, int((budget / 3) * 0.70))  # 0.70 keeps us under after base64+json overhead
+
+          # Fill logs from the end (most useful)
+          payload["check1_log_b64"] = b64_tail(LOG_PATHS["check1"], per_log_raw)
+          payload["check2_log_b64"] = b64_tail(LOG_PATHS["check2"], per_log_raw)
+          payload["check3_log_b64"] = b64_tail(LOG_PATHS["check3"], per_log_raw)
+
+          # If we still exceed MAX_JSON_BYTES (possible with weird overhead), shrink iteratively.
+          def encoded_size(p) -> int:
+              return len(json.dumps(p, separators=(",", ":")).encode("utf-8"))
+
+          size = encoded_size(payload)
+          if size > MAX_JSON_BYTES:
+              # shrink all logs together until it fits
+              shrink_raw = per_log_raw
+              for _ in range(20):
+                  if size <= MAX_JSON_BYTES:
+                      break
+                  shrink_raw = int(shrink_raw * 0.75)
+                  payload["check1_log_b64"] = b64_tail(LOG_PATHS["check1"], shrink_raw)
+                  payload["check2_log_b64"] = b64_tail(LOG_PATHS["check2"], shrink_raw)
+                  payload["check3_log_b64"] = b64_tail(LOG_PATHS["check3"], shrink_raw)
+                  size = encoded_size(payload)
+
+          with open("/tmp/n8n_payload.json", "wb") as f:
+              f.write(json.dumps(payload).encode("utf-8"))
+          PY
+
+          # POST the file (no huge args/env)
+          curl -sS -X POST "$CALLBACK_URL" -H "Content-Type: application/json" --data-binary @/tmp/n8n_payload.json
+          echo
+          true
